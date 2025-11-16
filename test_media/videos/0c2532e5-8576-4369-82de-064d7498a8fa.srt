@@ -1,0 +1,36 @@
+1
+00:00:00,000 --> 00:00:04,000
+Welcome! Today we'll explore the concept of uniqueness in mathematics.
+
+2
+00:00:04,000 --> 00:00:10,000
+Uniqueness means that exactly one solution or element exists that satisfies a particular condition.
+
+3
+00:00:10,000 --> 00:00:15,000
+Let's visualize this. On the left, we see a unique element - just one special point in our set.
+
+4
+00:00:15,000 --> 00:00:21,000
+Compare this to the right side, where we have multiple elements. This is not unique.
+
+5
+00:00:21,000 --> 00:00:26,000
+A classic example is the identity element for addition. Zero is the unique additive identity.
+
+6
+00:00:26,000 --> 00:00:32,000
+Watch how zero works: five plus zero equals five, and negative three plus zero equals negative three.
+
+7
+00:00:32,000 --> 00:00:38,000
+To prove uniqueness, we use a clever technique: assume two solutions exist, then show they must be equal.
+
+8
+00:00:38,000 --> 00:00:44,000
+This proof method guarantees that only one element can have the special property we're looking for.
+
+9
+00:00:44,000 --> 00:00:50,000
+Understanding uniqueness helps us recognize when mathematical objects have exactly one special element. Thanks for watching!
+

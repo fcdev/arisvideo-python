@@ -140,6 +140,23 @@ os.makedirs("temp_output", exist_ok=True)
 app.mount("/media", StaticFiles(directory="media"), name="media")
 
 
+# Database lifecycle events
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database connection on startup"""
+    from db import connect_db
+    await connect_db()
+    logger.info("🚀 Service started and database connected")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close database connection on shutdown"""
+    from db import disconnect_db
+    await disconnect_db()
+    logger.info("Service shutting down")
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -233,8 +250,12 @@ async def generate_animation(
     if not validate_prompt(request.prompt):
         raise HTTPException(status_code=400, detail="Invalid or unsafe prompt provided")
 
-    # Create status tracking
-    status_tracker.create(animation_id, "Initializing video generation")
+    # Create status tracking (database write)
+    await status_tracker.create(
+        animation_id,
+        "Initializing video generation",
+        prompt=request.prompt
+    )
 
     # Start background video generation task
     asyncio.create_task(generate_video_background(request, animation_id))
@@ -265,7 +286,7 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
         logger.info("=" * 120)
 
         # Update status
-        status_tracker.update(animation_id, status="processing", step=1, step_message="Generating Manim script")
+        await status_tracker.update(animation_id, status="processing", step=1, step_message="Generating Manim script")
 
         # Step 1: Generate and refine Manim script using Claude
         logger.info("📝 Step 1: Generating Manim script")
@@ -295,7 +316,7 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
 
         # Step 3: Execute the Manim script
         logger.info("🎬 Step 2: Rendering animation")
-        status_tracker.update(animation_id, step=2, step_message="Rendering animation")
+        await status_tracker.update(animation_id, step=2, step_message="Rendering animation")
 
         try:
             video_path = await execute_manim_script(script_path, animation_id, request.resolution)
@@ -323,7 +344,7 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
 
         if request.include_audio:
             logger.info("🎵 Step 3: Generating audio")
-            status_tracker.update(animation_id, step=3, step_message="Generating audio")
+            await status_tracker.update(animation_id, step=3, step_message="Generating audio")
 
             # Get video duration for timing
             video_duration = await get_video_duration(video_path)
@@ -386,7 +407,7 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
 
             if request.sync_method != "subtitle_overlay":
                 logger.info("🎬 Step 4: Combining audio and video")
-                status_tracker.update(animation_id, step=4, step_message="Combining audio and video")
+                await status_tracker.update(animation_id, step=4, step_message="Combining audio and video")
 
                 await combine_audio_video(video_path, audio_path, final_video_path, video_duration)
                 logger.info("✅ Audio-video combination completed")
@@ -414,7 +435,7 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
         logger.info(f"🎉 Video generation completed! Time: {total_time:.1f}s")
 
         # Update final status
-        status_tracker.update(
+        await status_tracker.update(
             animation_id,
             status="completed",
             step_message="Generation completed",
@@ -429,7 +450,7 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
     except Exception as e:
         # Update error status
         logger.error(f"❌ Video generation failed: {str(e)}")
-        status_tracker.update(
+        await status_tracker.update(
             animation_id,
             status="failed",
             step_message=f"Generation failed: {str(e)}",
@@ -441,61 +462,6 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
 
         # Clean up file processor
         cleanup_file_processor()
-
-
-@app.get("/status/{video_id}")
-async def get_video_status(
-    video_id: str,
-    api_key: None = Depends(verify_api_key)
-):
-    """
-    Get the generation status for a video.
-    Fallback to checking disk if in-memory status is missing (handles restarts).
-    """
-    status = status_tracker.get(video_id)
-
-    if not status:
-        # Fallback: check if video file exists on disk
-        # This handles cases where backend restarted and lost in-memory status
-        storage_path = os.getenv("VIDEO_STORAGE_PATH", "./media/videos")
-        video_path = f"{storage_path}/{video_id}.mp4"
-
-        if os.path.exists(video_path):
-            # Video exists on disk, return completed status
-            try:
-                duration = await get_video_duration(video_path)
-            except:
-                duration = None
-
-            file_stat = os.stat(video_path)
-            created_time = datetime.fromtimestamp(file_stat.st_ctime)
-            modified_time = datetime.fromtimestamp(file_stat.st_mtime)
-
-            return {
-                "video_id": video_id,
-                "status": "completed",
-                "step": 4,
-                "message": "Video generation completed (recovered from disk)",
-                "file_path": video_path,
-                "duration": duration,
-                "error": None,
-                "created_at": created_time.isoformat(),
-                "updated_at": modified_time.isoformat()
-            }
-        else:
-            raise HTTPException(status_code=404, detail="Video not found")
-
-    return {
-        "video_id": status.video_id,
-        "status": status.status,
-        "step": status.step,
-        "message": status.step_message,
-        "file_path": status.file_path,
-        "duration": status.duration,
-        "error": status.error,
-        "created_at": status.created_at.isoformat(),
-        "updated_at": status.updated_at.isoformat()
-    }
 
 
 @app.get("/video/{video_id}")
@@ -599,19 +565,6 @@ async def get_subtitle_file(
         media_type="application/x-subrip",
         filename=f"{video_id}.srt"
     )
-
-
-@app.get("/cleanup")
-async def cleanup_old_status(
-    api_key: None = Depends(verify_api_key)
-):
-    """
-    Cleanup old status entries (admin endpoint).
-    """
-    cleaned = status_tracker.cleanup_old()
-    return {
-        "message": f"Cleaned up {cleaned} old status entries"
-    }
 
 
 if __name__ == "__main__":

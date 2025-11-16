@@ -1116,6 +1116,7 @@ async def estimate_narration_duration(client: anthropic.Anthropic, prompt: str) 
         duration_text = extract_text_from_content(content).strip()
         
         try:
+            duration_text = duration_text.strip()
             estimated_duration = float(duration_text)
             # Clamp to reasonable range
             return max(30.0, min(90.0, estimated_duration))
