@@ -186,7 +186,7 @@ class FileProcessor:
     
     async def _extract_from_image(self, file_path: str) -> Optional[str]:
         """Extract text from image using OCR with enhanced math recognition."""
-        # 运行时检测OCR可用性，避免导入时检测的问题
+        # Verify OCR dependencies at runtime to avoid import-time failures
         try:
             import pytesseract
             from PIL import Image
@@ -240,18 +240,18 @@ class FileProcessor:
             if text_results:
                 # Log all attempts for debugging
                 logger.info("=" * 60)
-                logger.info("👁️ 【OCR处理详情】")
-                logger.info(f"   📊 尝试方法数: {len(text_results)}")
+                logger.info("👁️ OCR processing details")
+                logger.info(f"   📊 Attempts: {len(text_results)}")
                 for method, text in text_results:
                     logger.info(f"   📝 {method}: {repr(text[:50])}...")
                 
                 # Use the longest result as it's likely more complete
                 best_result = max(text_results, key=lambda x: len(x[1]))[1]
-                logger.info(f"   ✨ 最佳结果: {repr(best_result[:50])}...")
+                logger.info(f"   ✨ Best candidate: {repr(best_result[:50])}...")
                 
                 # Apply math symbol corrections
                 corrected_text = self._correct_math_symbols(best_result)
-                logger.info(f"   🔧 修正后结果: {repr(corrected_text[:100])}")
+                logger.info(f"   🔧 After symbol cleanup: {repr(corrected_text[:100])}")
                 logger.info("=" * 60)
                 
                 return corrected_text

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Manim视频质量优化器
-专门优化数学图形的显示精度，防止错位重叠等问题
+Manim video quality optimizer.
+Keeps rendered math graphics crisp and avoids overlap or alignment issues.
 """
 
 import re
@@ -13,10 +13,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ManimOptimizer:
-    """Manim脚本优化器，提升数学图形质量"""
+    """Improves generated Manim scripts for consistent math visuals"""
     
     def __init__(self):
-        # 定义安全的坐标范围
+        # Define safe coordinate zones
         self.safe_bounds = {
             'title_zone': {'y_min': 2.5, 'y_max': 4.0},
             'left_zone': {'x_min': -6.0, 'x_max': -1.0, 'y_min': -2.5, 'y_max': 2.5},
@@ -24,12 +24,12 @@ class ManimOptimizer:
             'buffer_zone': {'x_min': -1.0, 'x_max': 1.0}
         }
         
-        # 数学图形的最佳尺寸参数（增大图形尺寸）
+        # Recommended geometry sizing (slightly larger than default Manim)
         self.optimal_sizes = {
-            'triangle_max_side': 1.8,     # 从1.2增加到1.8
-            'square_max_side': 1.6,       # 从1.0增加到1.6
-            'circle_max_radius': 1.3,     # 从0.8增加到1.3
-            'line_max_length': 2.2,       # 从1.5增加到2.2
+            'triangle_max_side': 1.8,     # allows larger example triangles
+            'square_max_side': 1.6,
+            'circle_max_radius': 1.3,
+            'line_max_length': 2.2,
             'text_font_size': 16,
             'title_font_size': 32,
             'min_spacing': 0.3,
@@ -38,43 +38,43 @@ class ManimOptimizer:
     
     def optimize_script(self, script: str) -> str:
         """
-        全面优化Manim脚本
+        Apply all optimization passes to a Manim script.
         """
-        logger.info("开始优化Manim脚本...")
+        logger.info("Starting Manim script optimization...")
         
-        # 1. 修复坐标超限问题
+        # 1. Clamp extreme coordinates
         script = self._fix_coordinate_bounds(script)
         
-        # 2. 优化图形尺寸
+        # 2. Normalize geometry sizes
         script = self._optimize_geometry_sizes(script)
         
-        # 3. 增强间距控制
+        # 3. Enforce spacing controls
         script = self._enhance_spacing_control(script)
         
-        # 4. 添加精确定位
+        # 4. Add precise positioning
         script = self._add_precise_positioning(script)
         
-        # 5. 优化数学公式渲染
+        # 5. Improve math rendering
         script = self._optimize_math_rendering(script)
         
-        # 6. 添加边界检查
+        # 6. Add boundary validation
         script = self._add_boundary_validation(script)
         
-        logger.info("Manim脚本优化完成")
+        logger.info("Manim script optimization completed")
         return script
     
     def _fix_coordinate_bounds(self, script: str) -> str:
-        """修复坐标超出安全范围的问题"""
+        """Clamp coordinates and sizes that exceed safe bounds"""
         
-        # 更精确的坐标修复规则（放宽限制以允许更大图形）
+        # Relaxed coordinate fixes so shapes stay visible yet within frame
         coordinate_patterns = {
-            # 右侧图形区域的坐标限制（增大允许范围）
+            # Constrain offsets for the right-hand side showcase area
             r'(\d+(?:\.\d+)?)\s*\*\s*RIGHT': lambda m: f"{min(1.8, float(m.group(1)))}*RIGHT" if float(m.group(1)) > 1.8 else m.group(0),
             r'(\d+(?:\.\d+)?)\s*\*\s*UP': lambda m: f"{min(2.0, float(m.group(1)))}*UP" if float(m.group(1)) > 2.0 else m.group(0),
             r'(\d+(?:\.\d+)?)\s*\*\s*DOWN': lambda m: f"{min(2.0, float(m.group(1)))}*DOWN" if float(m.group(1)) > 2.0 else m.group(0),
             r'(\d+(?:\.\d+)?)\s*\*\s*LEFT': lambda m: f"{min(1.8, float(m.group(1)))}*LEFT" if float(m.group(1)) > 1.8 else m.group(0),
             
-            # 尺寸参数限制（允许更大尺寸）
+            # Limit geometry size parameters
             r'side_length\s*=\s*(\d+(?:\.\d+)?)': lambda m: f"side_length={min(1.6, float(m.group(1)))}" if float(m.group(1)) > 1.6 else m.group(0),
             r'radius\s*=\s*(\d+(?:\.\d+)?)': lambda m: f"radius={min(1.3, float(m.group(1)))}" if float(m.group(1)) > 1.3 else m.group(0),
         }
@@ -85,41 +85,41 @@ class ManimOptimizer:
         return script
     
     def _optimize_geometry_sizes(self, script: str) -> str:
-        """优化几何图形的尺寸以确保最佳显示效果"""
+        """Normalize geometry size arguments for clearer visuals"""
         
-        # 三角形优化
+        # Triangle sanity checks
         triangle_pattern = r'Polygon\s*\(\s*ORIGIN\s*,\s*([^,]+)\s*,\s*([^)]+)\)'
         def optimize_triangle(match):
             point1 = match.group(1).strip()
             point2 = match.group(2).strip()
             
-            # 确保三角形不会太大
+            # Keep demo triangles compact
             if '*RIGHT' in point1 and '*UP' in point2:
                 return f'Polygon(ORIGIN, 1.0*RIGHT, 1.0*RIGHT + 1.2*UP)'
             return match.group(0)
         
         script = re.sub(triangle_pattern, optimize_triangle, script)
         
-        # 正方形优化（使用更大的默认尺寸）
+        # Use friendlier default sizes for squares
         script = re.sub(
             r'Square\s*\(\s*side_length\s*=\s*\d+(?:\.\d+)?\s*\)',
-            'Square(side_length=1.4)',  # 从1.0增加到1.4
+            'Square(side_length=1.4)',
             script
         )
         
-        # 圆形优化（使用更大的默认半径）
+        # And for circles
         script = re.sub(
             r'Circle\s*\(\s*radius\s*=\s*\d+(?:\.\d+)?\s*\)',
-            'Circle(radius=1.1)',  # 从0.8增加到1.1
+            'Circle(radius=1.1)',
             script
         )
         
         return script
     
     def _enhance_spacing_control(self, script: str) -> str:
-        """增强间距控制，确保元素不重叠"""
+        """Force healthy spacing so shapes do not overlap"""
         
-        # 强制使用合适的间距
+        # Inject sensible spacing defaults
         spacing_patterns = {
             r'\.arrange\s*\(\s*DOWN\s*\)': '.arrange(DOWN, buff=0.4)',
             r'\.arrange\s*\(\s*RIGHT\s*\)': '.arrange(RIGHT, buff=0.4)',
@@ -137,24 +137,24 @@ class ManimOptimizer:
         return script
     
     def _add_precise_positioning(self, script: str) -> str:
-        """添加精确的定位控制"""
+        """Group and position generated graphics consistently"""
         
-        # 确保所有图形都在正确的区域
+        # Track whether we have geometry to reposition
         positioning_fixes = []
         
-        # 检查是否有图形需要移动到右侧区域
+        # If we detect shapes, ensure they are arranged on the right side
         if re.search(r'(Polygon|Square|Circle|Rectangle)\s*\([^)]*\)', script):
             if 'move_to(RIGHT*3)' not in script:
-                # 在construct方法中添加图形分组和定位
+                # Inject grouping logic inside construct
                 construct_pattern = r'(def construct\(self\):.*?)(self\.play)'
                 def add_positioning(match):
                     construct_content = match.group(1)
                     play_start = match.group(2)
                     
-                    # 添加图形分组和定位代码
+                    # Add grouping/positioning code
                     positioning_code = '''
         
-        # 自动图形分组和定位优化
+        # Automatic grouping + positioning for generated objects
         all_graphics = []
         for obj_name in dir():
             obj = locals().get(obj_name)
@@ -165,7 +165,7 @@ class ManimOptimizer:
             graphics_group = VGroup(*all_graphics)
             graphics_group.arrange(DOWN, buff=0.4)
             graphics_group.move_to(RIGHT*3)
-            graphics_group.scale(1.0)  # 从0.7改为1.0，不缩小
+            graphics_group.scale(1.0)  # keep proportions without shrinking
         
         '''
                     return construct_content + positioning_code + play_start
@@ -175,14 +175,14 @@ class ManimOptimizer:
         return script
     
     def _optimize_math_rendering(self, script: str) -> str:
-        """优化数学公式的渲染质量"""
+        """Standardize math rendering for clarity"""
         
-        # 确保数学公式使用正确的对象类型
+        # Ensure math objects use the correct nodes
         math_optimizations = {
-            # 避免中文字符在MathTex中使用
+            # Avoid non-Latin glyphs that MathTex cannot render
             r'MathTex\s*\(\s*["\']([^"\']*[\u4e00-\u9fff][^"\']*)["\']': lambda m: f'Text("{m.group(1)}", font_size=20)',
             
-            # 优化数学公式的字体大小
+            # Provide default font size
             r'MathTex\s*\(\s*([^)]+)\s*\)(?!\s*,\s*font_size)': r'MathTex(\1, font_size=24)',
         }
         
@@ -195,33 +195,33 @@ class ManimOptimizer:
         return script
     
     def _add_boundary_validation(self, script: str) -> str:
-        """添加边界验证代码以防止元素超出屏幕"""
+        """Inject boundary validation so elements stay on screen"""
         
-        # 在construct方法末尾添加边界检查
+        # Append validation helper inside construct
         validation_code = '''
         
-        # 边界验证和自动调整
+        # Boundary validation and auto-adjustment
         def validate_and_adjust_positions(scene_objects):
             for obj in scene_objects:
                 if hasattr(obj, 'get_center'):
                     center = obj.get_center()
-                    # 检查是否超出安全边界
-                    if center[0] > 5.5:  # 右边界
+                    # Clamp to safe view frame
+                    if center[0] > 5.5:  # right bound
                         obj.shift(LEFT * (center[0] - 5.0))
-                    elif center[0] < -5.5:  # 左边界
+                    elif center[0] < -5.5:  # left bound
                         obj.shift(RIGHT * (-5.0 - center[0]))
                     
-                    if center[1] > 3.5:  # 上边界
+                    if center[1] > 3.5:  # upper bound
                         obj.shift(DOWN * (center[1] - 3.0))
-                    elif center[1] < -3.5:  # 下边界
+                    elif center[1] < -3.5:  # lower bound
                         obj.shift(UP * (-3.0 - center[1]))
         
-        # 在动画开始前验证所有对象的位置
+        # Run validation before the first animation
         all_scene_objects = [obj for obj in locals().values() if hasattr(obj, 'get_center')]
         validate_and_adjust_positions(all_scene_objects)
         '''
         
-        # 将验证代码插入到第一个self.play之前
+        # Insert validation before the first self.play
         script = re.sub(
             r'(\s+)(self\.play)',
             r'\1' + validation_code + r'\n\1\2',
@@ -232,7 +232,7 @@ class ManimOptimizer:
         return script
     
     def generate_enhanced_system_prompt(self) -> str:
-        """生成增强的系统提示词，包含更严格的质量控制"""
+        """Return a stricter system prompt for Claude to follow"""
         
         return f"""
         
@@ -287,43 +287,43 @@ RETURN ONLY mathematically precise, visually clear Python code.
         """
 
 def enhance_script_generation_prompt(original_prompt: str) -> str:
-    """增强脚本生成的提示词，加入质量控制"""
+    """Append the enhanced quality rules to an LLM prompt"""
     
     optimizer = ManimOptimizer()
     enhanced_section = optimizer.generate_enhanced_system_prompt()
     
-    # 将增强的质量控制规则添加到原始提示词中
+    # Append the quality block to the original instructions
     enhanced_prompt = original_prompt + enhanced_section
     
     return enhanced_prompt
 
 def validate_manim_quality(script: str) -> Dict[str, Any]:
-    """验证Manim脚本的质量"""
+    """Lint a Manim script for layout violations"""
     
     issues = []
     
-    # 检查坐标超限
+    # Coordinate checks
     large_coords = re.findall(r'(\d+(?:\.\d+)?)\s*\*\s*(?:RIGHT|UP|DOWN|LEFT)', script)
     for coord in large_coords:
         if float(coord) > 1.5:
-            issues.append(f"坐标过大: {coord} (建议 ≤1.0)")
+            issues.append(f"Coordinate too large: {coord} (suggest ≤ 1.0)")
     
-    # 检查间距设置
+    # Spacing checks
     if '.arrange(' in script and 'buff=' not in script:
-        issues.append("缺少间距设置，可能导致重叠")
+        issues.append("Missing spacing (buff) configuration; objects may overlap")
     
-    # 检查定位
+    # Positioning checks
     if ('Polygon(' in script or 'Square(' in script) and 'move_to(RIGHT*3)' not in script:
-        issues.append("图形未正确定位到右侧区域")
+        issues.append("Graphics not positioned in the right-side showcase zone")
     
-    # 检查尺寸
+    # Size checks
     side_lengths = re.findall(r'side_length\s*=\s*(\d+(?:\.\d+)?)', script)
     for size in side_lengths:
         if float(size) > 1.2:
-            issues.append(f"图形尺寸过大: {size} (建议 ≤1.0)")
+            issues.append(f"Shape size too large: {size} (suggest ≤ 1.0)")
     
     return {
         'has_issues': len(issues) > 0,
         'issues': issues,
-        'score': max(0, 100 - len(issues) * 20)  # 质量评分
+        'score': max(0, 100 - len(issues) * 20)  # simple quality score
     }

@@ -11,10 +11,10 @@ import logging
 import mimetypes
 from typing import Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 # Load environment variables from .env file
 load_dotenv()
@@ -436,11 +436,40 @@ async def get_video_status(
 ):
     """
     Get the generation status for a video.
+    Fallback to checking disk if in-memory status is missing (handles restarts).
     """
     status = status_tracker.get(video_id)
 
     if not status:
-        raise HTTPException(status_code=404, detail="Video not found")
+        # Fallback: check if video file exists on disk
+        # This handles cases where backend restarted and lost in-memory status
+        storage_path = os.getenv("VIDEO_STORAGE_PATH", "./media/videos")
+        video_path = f"{storage_path}/{video_id}.mp4"
+
+        if os.path.exists(video_path):
+            # Video exists on disk, return completed status
+            try:
+                duration = await get_video_duration(video_path)
+            except:
+                duration = None
+
+            file_stat = os.stat(video_path)
+            created_time = datetime.fromtimestamp(file_stat.st_ctime)
+            modified_time = datetime.fromtimestamp(file_stat.st_mtime)
+
+            return {
+                "video_id": video_id,
+                "status": "completed",
+                "step": 4,
+                "message": "Video generation completed (recovered from disk)",
+                "file_path": video_path,
+                "duration": duration,
+                "error": None,
+                "created_at": created_time.isoformat(),
+                "updated_at": modified_time.isoformat()
+            }
+        else:
+            raise HTTPException(status_code=404, detail="Video not found")
 
     return {
         "video_id": status.video_id,
@@ -456,12 +485,14 @@ async def get_video_status(
 
 
 @app.get("/video/{video_id}")
-async def download_video(
+async def stream_video(
     video_id: str,
+    request: Request,
     api_key: None = Depends(verify_api_key)
 ):
     """
-    Download the generated video file.
+    Stream video file with range request support for proper playback and seeking.
+    Supports HTTP range requests (HTTP 206 Partial Content) for efficient streaming.
     """
     storage_path = os.getenv("VIDEO_STORAGE_PATH", "./media/videos")
     video_path = f"{storage_path}/{video_id}.mp4"
@@ -469,11 +500,69 @@ async def download_video(
     if not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Video file not found")
 
-    return FileResponse(
-        video_path,
-        media_type="video/mp4",
-        filename=f"{video_id}.mp4"
-    )
+    # Get file size
+    file_size = os.stat(video_path).st_size
+
+    # Parse Range header
+    range_header = request.headers.get("range")
+
+    if range_header:
+        # Parse range header (format: "bytes=start-end")
+        range_match = range_header.replace("bytes=", "").split("-")
+        start = int(range_match[0]) if range_match[0] else 0
+        end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
+
+        # Ensure valid range
+        start = max(0, min(start, file_size - 1))
+        end = max(start, min(end, file_size - 1))
+        content_length = end - start + 1
+
+        # Stream partial content
+        def iterfile():
+            with open(video_path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                chunk_size = 8192
+                while remaining > 0:
+                    chunk = f.read(min(chunk_size, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(content_length),
+            "Content-Type": "video/mp4",
+        }
+
+        return StreamingResponse(
+            iterfile(),
+            status_code=206,
+            headers=headers,
+            media_type="video/mp4"
+        )
+
+    else:
+        # Stream full file
+        def iterfile():
+            with open(video_path, "rb") as f:
+                chunk_size = 8192
+                while chunk := f.read(chunk_size):
+                    yield chunk
+
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Type": "video/mp4",
+        }
+
+        return StreamingResponse(
+            iterfile(),
+            headers=headers,
+            media_type="video/mp4"
+        )
 
 
 @app.get("/cleanup")

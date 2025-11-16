@@ -1,6 +1,19 @@
-# Manimations API
+# ArisVideo Python Service
 
-An API-based educational animation generator using Manim and Claude AI. This service accepts natural language prompts and generates educational animation videos automatically with optional AI-generated narration.
+FastAPI microservice that powers ArisVideo’s Claude → Manim → FFmpeg generation pipeline. The mono-repo also contains the Next.js dashboard (`arisvideo-web`), so this README highlights how the backend fits into the broader product.
+
+## Monorepo Overview
+
+```
+arisvideo/
+├── arisvideo-python   # FastAPI service (this README)
+├── arisvideo-web      # Next.js dashboard + API routes
+├── AGENTS.md          # Ground rules for contributors
+├── CLAUDE.md          # Architecture deep dive
+└── MIGRATION_GUIDE.md # Rollout procedures
+```
+
+Build both apps locally when developing features that touch API + UI. The Next.js client forwards all calls through its `/api/*` route handlers, which in turn talk to this service via `PYTHON_SERVICE_URL` and sign requests with `PYTHON_API_KEY`.
 
 ## 🚀 Features
 
@@ -11,8 +24,8 @@ An API-based educational animation generator using Manim and Claude AI. This ser
 - 🎥 Multiple resolution support (480p to 1080p)
 - 🔊 AI-generated narration with multiple voices and languages
 - 🎯 Audio-video synchronization with timing analysis
-- 🌍 **智能语言检测和语音匹配**: 自动检测输入语言，并为每种语言选择最适合的TTS语音
-- 🗣️ **多语言TTS支持**: 支持12种语言，每种语言都有专门优化的语音选择
+- 🌍 **Smart language detection & voice matching**: Automatically detects the input language and picks an appropriate TTS voice
+- 🗣️ **Multilingual TTS support**: 12 languages covered, each mapped to a curated voice profile
 - 📱 Direct video URL access for easy embedding
 
 ## 📋 Prerequisites
@@ -69,10 +82,21 @@ cp .env.example .env
 # Edit .env with your API keys
 ```
 
-Or set environment variables manually:
+Key variables:
+
+| Name | Purpose |
+| ---- | ------- |
+| `PYTHON_API_KEY` | Shared secret with `arisvideo-web` (routed as `X-API-Key`) |
+| `ANTHROPIC_API_KEY` | Required for Claude script + narration planning |
+| `OPENAI_API_KEY` | Optional, enables TTS voices |
+| `VIDEO_STORAGE_PATH` | Output directory for rendered mp4 files (defaults to `./media/videos`) |
+
+Set them manually if you prefer:
 ```bash
+export PYTHON_API_KEY="match-your-nextjs-env"
 export ANTHROPIC_API_KEY="your-anthropic-api-key"
 export OPENAI_API_KEY="your-openai-api-key"  # Optional, for narration
+export VIDEO_STORAGE_PATH="$(pwd)/media/videos"
 ```
 
 ## 🚀 Running the API
@@ -89,6 +113,19 @@ uv run uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
 The API will be available at `http://localhost:8000`
 
 Visit `http://localhost:8000/docs` for interactive API documentation.
+
+### Working with the Next.js Frontend
+
+1. Start this service (`uv run uvicorn app:app --reload`).
+2. Start `arisvideo-web` (`npm run dev`) with `.env.local` that references the same `PYTHON_SERVICE_URL` and `PYTHON_API_KEY`.
+3. Use the dashboard to log in, upload docs, and kick off `/api/videos/generate` – the Next.js route handlers will attach the shared key automatically.
+
+### Smoke Tests
+
+- `curl -H "X-API-Key: $PYTHON_API_KEY" http://localhost:8000/health`
+- `curl -X POST http://localhost:8000/generate -H "X-API-Key: $PYTHON_API_KEY" -d '{...}'`
+
+The generation request should log each pipeline step (Claude → Manim → FFmpeg) in the terminal.
 
 ## 📚 API Endpoints
 
@@ -143,22 +180,22 @@ Generate an educational animation video from a text prompt.
 - `include_audio` (boolean, optional): Whether to generate narration (default: true)
 - `voice` (string, optional): TTS voice for narration
   - `"alloy"` (default), `"echo"`, `"fable"`, `"onyx"`, `"nova"`, `"shimmer"`
-  - **智能语音选择**: 如果使用默认语音 `"alloy"`，系统会根据检测到的语言自动选择最适合的语音
+  - **Smart voice selection**: leaving `"alloy"` automatically picks a best-fit voice for the detected language
 - `language` (string, optional): Language code (auto-detected if not specified)
   - Supported: `en`, `es`, `fr`, `de`, `it`, `pt`, `ru`, `ja`, `ko`, `zh`, `ar`, `hi`
-  - **自动语音映射**: 系统会根据语言自动选择合适的TTS语音：
-    - 🇺🇸 英语 (en) → alloy (清晰中性)
-    - 🇪🇸 西班牙语 (es) → nova (女性，适合浪漫语言)
-    - 🇫🇷 法语 (fr) → shimmer (温暖清脆)
-    - 🇩🇪 德语 (de) → onyx (男性，适合德语严谨感)
-    - 🇮🇹 意大利语 (it) → nova (女性)
-    - 🇵🇹 葡萄牙语 (pt) → nova (女性)
-    - 🇷🇺 俄语 (ru) → echo (男性)
-    - 🇯🇵 日语 (ja) → shimmer (清脆)
-    - 🇰🇷 韩语 (ko) → shimmer (清脆)
-    - 🇨🇳 中文 (zh) → nova (女性)
-    - 🇸🇦 阿拉伯语 (ar) → fable (男性，深沉)
-    - 🇮🇳 印地语 (hi) → nova (女性)
+  - **Voice mapping**:
+    - 🇺🇸 English (en) → alloy (clear neutral)
+    - 🇪🇸 Spanish (es) → nova (warm female tone)
+    - 🇫🇷 French (fr) → shimmer (bright, crisp)
+    - 🇩🇪 German (de) → onyx (authoritative male tone)
+    - 🇮🇹 Italian (it) → nova (expressive female tone)
+    - 🇵🇹 Portuguese (pt) → nova (expressive female tone)
+    - 🇷🇺 Russian (ru) → echo (deep male tone)
+    - 🇯🇵 Japanese (ja) → shimmer (light precise voice)
+    - 🇰🇷 Korean (ko) → shimmer (light precise voice)
+    - 🇨🇳 Chinese (zh) → nova (balanced female voice)
+    - 🇸🇦 Arabic (ar) → fable (deep male tone)
+    - 🇮🇳 Hindi (hi) → nova (balanced female voice)
 - `sync_method` (string, optional): Audio synchronization method
   - `"timing_analysis"` (default): Analyze animation timing for precise sync
   - `"narration_first"`: Generate narration then match video

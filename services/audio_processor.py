@@ -347,9 +347,9 @@ async def create_synchronized_audio(
         
         logger.info(f"Processing {len(valid_segments)} valid segments out of {len(narration_segments)} total")
         
-        # 根据语言自动选择合适的语音
+        # Pick the most natural-sounding voice for the requested language
         selected_voice = get_voice_for_language(language, voice)
-        logger.info(f"同步音频生成 - 语言: {language}, 语音: {selected_voice}")
+        logger.info(f"Syncing narration: language={language}, voice={selected_voice}")
         
         for i, segment in enumerate(valid_segments):
             text = segment["text"].strip()
@@ -358,7 +358,7 @@ async def create_synchronized_audio(
             if len(text) < 3:
                 text = "Pause."  # Fallback for very short segments
             
-            logger.info(f"生成TTS片段 {i}: '{text[:50]}...'")
+            logger.info(f"Generating TTS segment {i}: '{text[:50]}...'")
             
             # Generate TTS for this segment
             response = client.audio.speech.create(
@@ -865,39 +865,38 @@ async def extract_narration_from_script(
 
 def get_voice_for_language(language: str, user_voice: str = "alloy") -> str:
     """
-    根据检测到的语言选择合适的TTS语音。
-    如果用户指定了语音且不是默认值，优先使用用户指定的语音。
+    Select the most appropriate TTS voice for the detected language.
+    Honor an explicit user-selected voice when provided.
     """
-    # 如果用户明确指定了非默认语音，优先使用用户选择
+    # Respect explicit voice selections (non-default)
     if user_voice != "alloy":
-        logger.info(f"使用用户指定的语音: {user_voice}")
+        logger.info(f"Using caller-provided voice: {user_voice}")
         return user_voice
     
-    # 根据语言自动选择合适的语音
+    # Otherwise map language to curated defaults
     language_to_voice = {
-        'en': 'alloy',      # 英语 - 清晰中性
-        'es': 'nova',       # 西班牙语 - 女性，适合浪漫语言
-        'fr': 'shimmer',    # 法语 - 温暖清脆，适合法语
-        'de': 'onyx',       # 德语 - 男性，适合德语的严谨感
-        'it': 'nova',       # 意大利语 - 女性，适合意大利语
-        'pt': 'nova',       # 葡萄牙语 - 女性
-        'ru': 'echo',       # 俄语 - 男性，适合俄语
-        'ja': 'shimmer',    # 日语 - 清脆，适合日语
-        'ko': 'shimmer',    # 韩语 - 清脆，适合韩语
-        'zh': 'nova',       # 中文 - 女性，适合中文
-        'ar': 'fable',      # 阿拉伯语 - 男性，深沉
-        'hi': 'nova'        # 印地语 - 女性
+        'en': 'alloy',      # English - neutral and clear
+        'es': 'nova',       # Spanish - warm female tone
+        'fr': 'shimmer',    # French - bright, crisp delivery
+        'de': 'onyx',       # German - confident male tone
+        'it': 'nova',       # Italian - expressive female tone
+        'pt': 'nova',       # Portuguese - expressive female tone
+        'ru': 'echo',       # Russian - deep male tone
+        'ja': 'shimmer',    # Japanese - light precise voice
+        'ko': 'shimmer',    # Korean - light precise voice
+        'zh': 'nova',       # Chinese - balanced female voice
+        'ar': 'fable',      # Arabic - resonant male tone
+        'hi': 'nova'        # Hindi - balanced female voice
     }
     
     selected_voice = language_to_voice.get(language, 'alloy')
-    logger.info(f"根据语言 '{language}' 自动选择语音: {selected_voice}")
+    logger.info(f"Auto-selected voice '{selected_voice}' for language '{language}'")
     return selected_voice
 
 
 async def generate_tts_audio(text: str, animation_id: str, voice: str = "alloy", language: str = "en") -> str:
     """
     Generate TTS audio using OpenAI's TTS API.
-    根据检测到的语言自动选择合适的语音。
     """
     try:
         client = get_openai_client()
@@ -909,10 +908,10 @@ async def generate_tts_audio(text: str, animation_id: str, voice: str = "alloy",
         
         text = text.strip()
         
-        # 根据语言自动选择合适的语音
+        # Pick the most natural-sounding voice for the language
         selected_voice = get_voice_for_language(language, voice)
         
-        logger.info(f"生成TTS音频 - 语言: {language}, 语音: {selected_voice}, 文本: '{text[:100]}...'")
+        logger.info(f"Generating TTS audio - language: {language}, voice: {selected_voice}, text: '{text[:100]}...'")
         
         # Create TTS audio with slower, clearer speech for education
         response = client.audio.speech.create(

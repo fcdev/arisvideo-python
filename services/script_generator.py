@@ -63,7 +63,7 @@ async def generate_and_refine_manim_script(
     Generate a Manim script and refine it if it fails to execute.
     """
     conversation_history: List[MessageParam] = []
-    analyzed_content = None  # 存储资料分析结果
+    analyzed_content = None  # cache structured analysis of uploaded materials
     
     for attempt in range(max_attempts):
         logger.info(f"Attempt {attempt + 1}/{max_attempts} to generate/refine script")
@@ -81,14 +81,14 @@ async def generate_and_refine_manim_script(
             test_result = await test_manim_script(script)
             
             if test_result["success"]:
-                # 如果有上传内容，验证内容覆盖率
+                # When uploads are provided, make sure the script covers their concepts
                 if file_context and analyzed_content:
                     key_concepts = analyzed_content.get('key_concepts', [])
                     coverage = verify_content_coverage(script, file_context, key_concepts)
                     
-                    # 只有在前几次尝试且覆盖率太低时才重新生成
+                    # Only force a regen when coverage is low and we still have attempts left
                     if coverage < 0.4 and attempt < max_attempts - 2:
-                        logger.info(f"内容覆盖率过低 ({coverage:.2f})，重新生成以更好地利用上传内容...")
+                        logger.info(f"Coverage too low ({coverage:.2f}); regenerating to incorporate uploaded content")
                         conversation_history.append({
                             "role": "assistant",
                             "content": script
@@ -259,15 +259,15 @@ async def generate_manim_script(
         text3.next_to(text2, DOWN, aligned_edge=LEFT, buff=0.3)
         
         # Graphics - right side, centered, NO OVERLAPPING
-        shape1 = Circle(radius=1.0)        # 从0.5增加到1.0
-        shape2 = Square(side_length=1.3)   # 从0.8增加到1.3
-        shape3 = Triangle().scale(1.0)     # 从0.6增加到1.0
+        shape1 = Circle(radius=1.0)        # expanded from 0.5 for clarity
+        shape2 = Square(side_length=1.3)   # expanded from 0.8 for clarity
+        shape3 = Triangle().scale(1.0)     # expanded from 0.6 for clarity
         
         # Arrange graphics properly to avoid overlapping
         graphics = VGroup(shape1, shape2, shape3)
         graphics.arrange(DOWN, buff=0.3)  # Stack vertically with spacing
         graphics.move_to(RIGHT*3)  # Position in right zone
-        graphics.scale(0.9)        # 从默认的0.7改为0.9，减少缩小
+        graphics.scale(0.9)        # scale less aggressively than the 0.7 default
         
         # Animation sequence
         self.play(Write(title))
@@ -292,7 +292,7 @@ async def generate_manim_script(
     TEXT AND LANGUAGE Guidelines:
     - Use Text() for non-English text, NOT MathTex() 
     - MathTex() only supports basic Latin characters and math symbols
-    - For Chinese/Japanese/Korean: use Text("文字") not MathTex("文字")
+    - For Chinese/Japanese/Korean: use Text("[non-Latin text]") not MathTex("[non-Latin text]")
     - For math with non-English: combine Text() and MathTex() separately
     - Example: VGroup(MathTex("x = 1"), Text(" or "), MathTex("x = -3"))
     
@@ -331,35 +331,35 @@ async def generate_manim_script(
 
     Return ONLY the Python code, no additional text or explanations."""
     
-    # 增强系统提示词，加入质量控制
+    # Strengthen the system prompt with quality controls
     system_prompt = enhance_script_generation_prompt(system_prompt)
     
     # Prepare user message with optional file context
     local_analyzed_content = None
     if file_context:
-        # 先分析上传的内容
-        logger.info("📋 分析上传的资料内容...")
+        # Analyze uploaded context before building the user message
+        logger.info("📋 Analyzing uploaded reference material...")
         local_analyzed_content = await analyze_uploaded_content(client, file_context, prompt, language)
         
         if local_analyzed_content:
-            # 基于分析结果构建更智能的用户消息
+            # Build a richer user message based on the analysis
             concepts_str = ', '.join(local_analyzed_content.get('key_concepts', []))
             formulas_str = ', '.join(local_analyzed_content.get('formulas', []))
             suggestions_str = ', '.join(local_analyzed_content.get('animation_suggestions', []))
             
-            # 详细日志输出 - 显示分析结果
+            # Log the structured analysis for debugging
             logger.info("=" * 120)
-            logger.info("📋 【资料分析详细结果】")
-            logger.info(f"   ✨ 内容类型: {local_analyzed_content.get('content_type', 'Unknown')}")
-            logger.info(f"   🔑 关键概念: {concepts_str}")
-            logger.info(f"   🎯 教育重点: {local_analyzed_content.get('educational_focus', 'N/A')}")
-            logger.info(f"   📐 数学公式: {formulas_str}")
-            logger.info(f"   🎬 动画建议: {suggestions_str}")
+            logger.info("📋 Upload analysis results")
+            logger.info(f"   ✨ Content type: {local_analyzed_content.get('content_type', 'Unknown')}")
+            logger.info(f"   🔑 Key concepts: {concepts_str}")
+            logger.info(f"   🎯 Educational focus: {local_analyzed_content.get('educational_focus', 'N/A')}")
+            logger.info(f"   📐 Formulas: {formulas_str}")
+            logger.info(f"   🎬 Animation suggestions: {suggestions_str}")
             logger.info("-" * 120)
-            logger.info("📄 【原始上传内容预览】")
+            logger.info("📄 Uploaded content preview")
             logger.info(f"{file_context[:500]}...")
             if len(file_context) > 500:
-                logger.info(f"... (共 {len(file_context)} 字符)")
+                logger.info(f"... (total {len(file_context)} chars)")
             logger.info("=" * 120)
             
             user_message = f"""Create an educational animation based on the following uploaded material:
@@ -378,14 +378,14 @@ Full Uploaded Content:
 
 CRITICAL: Base your animation on the KEY CONCEPTS and STRUCTURE from the uploaded material. The user's request indicates how to present this content. Focus on making the uploaded content visual and engaging."""
             
-            # 显示最终prompt
+            # Log the final prompt sent to Claude
             logger.info("-" * 120)
-            logger.info("🚀 【发送给Claude的完整Prompt】")
+            logger.info("🚀 Final prompt sent to Claude")
             logger.info("-" * 120)
             logger.info(user_message)
             logger.info("=" * 120)
         else:
-            # 分析失败时的降级处理（保持原有逻辑）
+            # Fall back to simpler messaging if analysis fails
             user_message = f"""Create an educational animation about: {prompt}
 
 Uploaded Content Context:
@@ -394,26 +394,26 @@ Uploaded Content Context:
 IMPORTANT: Use the uploaded content as the primary source for your animation."""
             
             logger.info("=" * 120)
-            logger.info("⚠️ 【资料分析失败，使用降级处理】")
+            logger.info("⚠️ Upload analysis failed, falling back to raw context")
             logger.info("-" * 120)
-            logger.info("📄 【原始上传内容】")
+            logger.info("📄 Uploaded content")
             logger.info(f"{file_context[:500]}...")
             if len(file_context) > 500:
-                logger.info(f"... (共 {len(file_context)} 字符)")
+                logger.info(f"... (total {len(file_context)} chars)")
             logger.info("-" * 120)
-            logger.info("🚀 【发送给Claude的完整Prompt】")
+            logger.info("🚀 Final prompt sent to Claude")
             logger.info("-" * 120)
             logger.info(user_message)
             logger.info("=" * 120)
     else:
         user_message = f"Create an educational animation about: {prompt}"
         logger.info("=" * 120)
-        logger.info("📝 【无上传资料，仅使用用户提示词】")
+        logger.info("📝 No uploads provided; using user prompt only")
         logger.info("-" * 120)
-        logger.info("👤 【用户输入】")
+        logger.info("👤 User input")
         logger.info(f"{prompt}")
         logger.info("-" * 120)
-        logger.info("🚀 【发送给Claude的完整Prompt】")
+        logger.info("🚀 Final prompt sent to Claude")
         logger.info("-" * 120)
         logger.info(user_message)
         logger.info("=" * 120)
@@ -430,13 +430,13 @@ IMPORTANT: Use the uploaded content as the primary source for your animation."""
         
         logger.info(f"Generating script with {len(messages)} messages")
         
-        # 打印完整的API调用参数
-        logger.info("🤖 【Claude API调用详情】")
+        # Log the full Claude API payload for debugging
+        logger.info("🤖 Claude API call details")
         logger.info("=" * 120)
-        logger.info("📋 【System Prompt】")
+        logger.info("📋 System prompt")
         logger.info(system_prompt)
         logger.info("=" * 120)
-        logger.info("💬 【Messages】")
+        logger.info("💬 Messages")
         for i, msg in enumerate(messages):
             logger.info(f"Message {i+1} ({msg['role']}):")
             logger.info(msg['content'])
@@ -458,15 +458,15 @@ IMPORTANT: Use the uploaded content as the primary source for your animation."""
         # Extract Python code from the response
         python_code = extract_python_code(raw_response)
         
-        # 应用质量优化
+        # Run the generated script through quality optimizations
         optimizer = ManimOptimizer()
         optimized_code = optimizer.optimize_script(python_code)
         
-        # 验证优化后的代码质量
+        # Validate the optimized code quality
         quality_report = validate_manim_quality(optimized_code)
-        logger.info(f"代码质量评分: {quality_report['score']}/100")
+        logger.info(f"Code quality score: {quality_report['score']}/100")
         if quality_report['has_issues']:
-            logger.warning(f"发现质量问题: {quality_report['issues']}")
+            logger.warning(f"Quality issues detected: {quality_report['issues']}")
         
         return optimized_code, local_analyzed_content
         
@@ -593,8 +593,8 @@ async def refine_manim_script(
         if not conversation_history:
             raise Exception("No valid messages found after validation")
         
-        # 打印refine阶段的完整API调用参数
-        logger.info("🔄 【Claude API调用详情 - REFINE阶段】")
+        # Log full payload for the refine phase
+        logger.info("🔄 Claude API call details - REFINE phase")
         logger.info("=" * 120)
         logger.info("📋 【System Prompt】")
         logger.info(system_prompt)
@@ -676,7 +676,7 @@ async def fix_manim_script_from_error(
     
     LaTeX/Text issues to fix:
     - LaTeX compilation errors: Use Text() for non-English characters instead of MathTex()
-    - For Chinese/Japanese/Korean text: Text("文字") not MathTex("文字")
+    - For Chinese/Japanese/Korean text: Text("[non-Latin text]") not MathTex("[non-Latin text]")
     - For mixed math and text: VGroup(MathTex("x = 1"), Text(" or "), MathTex("x = -3"))
     - MathTex() only supports basic Latin characters and math symbols
     - Escape special characters properly in LaTeX
@@ -724,13 +724,13 @@ async def fix_manim_script_from_error(
     try:
         fix_message = f"Fix this Manim script:\n\n{script}\n\nError message:\n{error_message}"
         
-        # 打印修复阶段的完整API调用参数
-        logger.info("🛠️ 【Claude API调用详情 - FIX阶段】")
+        # Log full payload for the fix phase
+        logger.info("🛠️ Claude API call details - FIX phase")
         logger.info("=" * 120)
-        logger.info("📋 【System Prompt】")
+        logger.info("📋 System prompt")
         logger.info(system_prompt)
         logger.info("=" * 120)
-        logger.info("💬 【Fix Message】")
+        logger.info("💬 Fix message")
         logger.info(fix_message)
         logger.info("=" * 120)
         
@@ -757,30 +757,30 @@ async def fix_manim_script_from_error(
 
 def auto_fix_riemann_rectangles_opacity(script: str) -> str:
     """
-    自动修复get_riemann_rectangles中opacity参数错误的问题
+    Automatically fix incorrect `opacity` arguments passed to get_riemann_rectangles.
     """
     import re
     
-    # 查找所有包含opacity参数的get_riemann_rectangles调用
+    # Look for every get_riemann_rectangles call that incorrectly passes opacity
     pattern = r'(.*?axes\.get_riemann_rectangles\([^)]*?),\s*opacity\s*=\s*([\d.]+)([^)]*?\))'
     
     def fix_opacity(match):
-        # 提取各个部分
+        # Extract the call fragments
         before_opacity = match.group(1)  # get_riemann_rectangles(curve, x_range=[...], 
-        opacity_value = match.group(2)   # 0.6 等数值
+        opacity_value = match.group(2)   # numeric opacity value
         after_opacity = match.group(3)   # )
         
-        # 重构为正确的调用方式
+        # Rebuild the call without the opacity argument
         fixed_call = before_opacity + after_opacity
-        # 下一行添加set_fill调用
+        # Then set the fill opacity separately
         return f"{fixed_call}\n        rectangles.set_fill(opacity={opacity_value})"
     
-    # 应用修复
+    # Apply the fix across the script
     fixed_script = re.sub(pattern, fix_opacity, script, flags=re.MULTILINE | re.DOTALL)
     
-    # 如果找到修复的情况，需要调整变量名
+    # If we changed any calls, align the rectangles variable naming
     if fixed_script != script:
-        # 确保rectangles变量名正确
+        # Ensure `rectangles` matches the assigned variable name
         fixed_script = re.sub(
             r'(\w+)\s*=\s*(axes\.get_riemann_rectangles\([^)]+\))\n\s+rectangles\.set_fill',
             r'\1 = \2\n        \1.set_fill',
@@ -1142,21 +1142,21 @@ async def estimate_narration_duration(client: anthropic.Anthropic, prompt: str) 
 
 def detect_mathematical_content(text: str) -> Dict[str, Any]:
     """
-    检测文本中的数学内容模式，即使OCR结果不完美
+    Detect math-related patterns in text, even when OCR output is noisy.
     
     Args:
-        text: OCR提取的文本
+        text: OCR-extracted text
         
     Returns:
-        检测到的数学内容信息
+        Structured info about detected mathematical elements
     """
     math_patterns = {
-        'integral': [r'∫', r'\[.*?x', r'J.*?x', r'integral', r'积分'],
-        'derivative': [r'∂', r'derivative', r'导数', r'd/dx'],
-        'equation': [r'=', r'solve', r'解', r'方程'],
-        'function': [r'f\(', r'g\(', r'函数', r'function'],
-        'exponent': [r'\^', r'power', r'幂', r'指数'],
-        'polynomial': [r'x\^', r'polynomial', r'多项式']
+        'integral': [r'∫', r'\[.*?x', r'J.*?x', r'integral', r'\u79ef\u5206'],
+        'derivative': [r'∂', r'derivative', r'\u5bfc\u6570', r'd/dx'],
+        'equation': [r'=', r'solve', r'\u89e3', r'\u65b9\u7a0b'],
+        'function': [r'f\(', r'g\(', r'\u51fd\u6570', r'function'],
+        'exponent': [r'\^', r'power', r'\u5e42', r'\u6307\u6570'],
+        'polynomial': [r'x\^', r'polynomial', r'\u591a\u9879\u5f0f']
     }
     
     detected_types = []
@@ -1169,16 +1169,16 @@ def detect_mathematical_content(text: str) -> Dict[str, Any]:
                 confidence_score += 1
                 break
     
-    # 特殊处理积分符号的常见误识别
+    # Handle common OCR mistakes for integral symbols
     if any(pattern in text.lower() for pattern in ['[ve', '] x', 'j x', '∫']):
         detected_types.append('integral')
         confidence_score += 2
     
-    # 检测变量模式 (x, y, z, n等)
+    # Detect standalone variable hints (x, y, z, n, t)
     if re.search(r'\b[xyznt]\b', text):
         confidence_score += 1
         
-    # 检测dx, dy等微分符号
+    # Detect dx/dy style differential notation
     if re.search(r'd[xyz]', text):
         detected_types.append('differential')
         confidence_score += 1
@@ -1197,16 +1197,16 @@ async def analyze_uploaded_content(
     language: str = 'en'
 ) -> Optional[Dict[str, Any]]:
     """
-    分析上传的资料内容，提取结构化信息
+    Analyze uploaded material and extract structured metadata.
     
     Args:
         client: Anthropic client
-        file_context: 上传文件的文本内容
-        user_prompt: 用户的提示词
-        language: 语言代码
+        file_context: Text content from uploaded files
+        user_prompt: Original user request
+        language: Language code for the material
         
     Returns:
-        分析结果的字典，包含内容类型、关键概念等信息
+        Dict containing content type, concepts, formulas, etc.
     """
     language_names = {
         'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German',
@@ -1243,25 +1243,25 @@ Example:
     "animation_suggestions": ["show parabola transformation", "demonstrate factoring steps"]
 }}"""
     
-    # 首先进行数学内容检测
+    # Run math-content heuristics first
     math_detection = detect_mathematical_content(file_context)
     logger.info("=" * 80)
-    logger.info("🔍 【数学内容检测结果】")
-    logger.info(f"   📊 检测结果: {math_detection}")
-    logger.info(f"   🎯 是否为数学内容: {'是' if math_detection['is_mathematical'] else '否'}")
-    logger.info(f"   📋 检测到的类型: {', '.join(math_detection['detected_types'])}")
-    logger.info(f"   💯 置信度评分: {math_detection['confidence_score']}")
+    logger.info("🔍 Math detection results")
+    logger.info(f"   📊 Raw detection: {math_detection}")
+    logger.info(f"   🎯 Contains math content: {'yes' if math_detection['is_mathematical'] else 'no'}")
+    logger.info(f"   📋 Detected types: {', '.join(math_detection['detected_types'])}")
+    logger.info(f"   💯 Confidence score: {math_detection['confidence_score']}")
     logger.info("=" * 80)
     
-    # 如果检测到数学内容但OCR结果很短或不完整，增强提示
+    # If OCR output is tiny but math is detected, add context hints
     enhanced_context = file_context
     if math_detection['is_mathematical'] and len(file_context.strip()) < 20:
         if 'integral' in math_detection['detected_types']:
-            enhanced_context += "\n\n[AI检测到积分符号，可能是积分题目: ∫x^n dx]"
-            logger.info("🔧 【智能增强】添加积分题目上下文")
+            enhanced_context += "\n\n[AI detected integral notation; likely ∫x^n dx style problem]"
+            logger.info("🔧 Context boost: added integral hint")
         if 'exponent' in math_detection['detected_types']:
-            enhanced_context += "\n\n[AI检测到指数表达式]"
-            logger.info("🔧 【智能增强】添加指数表达式上下文")
+            enhanced_context += "\n\n[AI detected exponential expression]"
+            logger.info("🔧 Context boost: added exponential hint")
     
     try:
         message = client.messages.create(
@@ -1282,11 +1282,11 @@ Example:
         import json
         try:
             analysis_result = json.loads(analysis_text)
-            logger.info(f"✅ 资料分析完成: 类型={analysis_result.get('content_type', 'unknown')}, 关键概念={len(analysis_result.get('key_concepts', []))}")
+            logger.info(f"✅ Content analysis complete: type={analysis_result.get('content_type', 'unknown')}, key concepts={len(analysis_result.get('key_concepts', []))}")
             return analysis_result
             
         except json.JSONDecodeError as e:
-            logger.warning(f"资料分析JSON解析失败: {str(e)}, 使用降级处理")
+            logger.warning(f"Content analysis JSON parse failed: {str(e)}; returning fallback data")
             return {
                 "content_type": "text_content",
                 "key_concepts": ["uploaded content"],
@@ -1299,38 +1299,38 @@ Example:
             }
         
     except Exception as e:
-        logger.warning(f"资料分析失败: {str(e)}, 返回None")
+        logger.warning(f"Content analysis failed: {str(e)}; returning None")
         return None
 
 
 def verify_content_coverage(script: str, file_context: str, key_concepts: List[str]) -> float:
     """
-    验证生成的脚本是否包含了上传资料的关键内容
+    Verify whether the generated script reflects key concepts from the uploads.
     
     Args:
-        script: 生成的Manim脚本
-        file_context: 原始上传内容
-        key_concepts: 关键概念列表
+        script: Generated Manim script
+        file_context: Raw uploaded content
+        key_concepts: List of extracted key concepts
         
     Returns:
-        覆盖率（0-1之间的浮点数）
+        Coverage ratio between 0 and 1
     """
     if not file_context or not key_concepts:
-        return 1.0  # 没有上传内容时默认通过
+        return 1.0  # nothing to validate against
     
     script_lower = script.lower()
     covered_concepts = 0
     
     for concept in key_concepts:
-        # 检查概念是否出现在脚本中（处理中英文）
+        # Simple substring check (case-insensitive)
         if concept.lower() in script_lower:
             covered_concepts += 1
     
     coverage = covered_concepts / len(key_concepts) if key_concepts else 1.0
     
     if coverage < 0.5:
-        logger.warning(f"⚠️ 内容覆盖率较低: {coverage:.2f}，可能需要重新生成")
+        logger.warning(f"⚠️ Coverage is low: {coverage:.2f}; consider regenerating")
     else:
-        logger.info(f"✅ 内容覆盖率: {coverage:.2f}")
+        logger.info(f"✅ Content coverage: {coverage:.2f}")
     
     return coverage

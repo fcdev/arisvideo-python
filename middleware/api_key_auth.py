@@ -16,12 +16,12 @@ def verify_api_key(x_api_key: Optional[str] = Header(None)) -> None:
     Raises:
         HTTPException: 401 if API key is missing or invalid
     """
-    expected_api_key = os.getenv("API_KEY")
+    expected_api_key = os.getenv("PYTHON_API_KEY") or os.getenv("API_KEY")
 
     if not expected_api_key:
         raise HTTPException(
             status_code=500,
-            detail="API_KEY not configured on server"
+            detail="PYTHON_API_KEY not configured on server"
         )
 
     if not x_api_key:
