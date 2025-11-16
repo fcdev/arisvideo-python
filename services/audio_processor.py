@@ -176,7 +176,7 @@ async def extract_animation_timing(client: anthropic.Anthropic, manim_script: st
     
     try:
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=2000,
             system=system_prompt,
             messages=[
@@ -261,7 +261,7 @@ async def generate_timed_narration(
     
     try:
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=3000,
             system=system_prompt,
             messages=[
@@ -276,8 +276,25 @@ async def generate_timed_narration(
         narration_text = extract_text_from_content(content)
         
         import json
+        def extract_json_array(text: str) -> str:
+            cleaned = text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned[3:].lstrip()
+                if cleaned.lower().startswith("json"):
+                    cleaned = cleaned[4:].lstrip()
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3].rstrip()
+            cleaned = cleaned.strip()
+            if cleaned and cleaned[0] not in "[{":
+                import re
+                match = re.search(r"(\[[\s\S]+\])", cleaned)
+                if match:
+                    cleaned = match.group(1).strip()
+            return cleaned or text
+        
+        narration_payload = extract_json_array(narration_text)
         try:
-            narration_segments = json.loads(narration_text)
+            narration_segments = json.loads(narration_payload)
             
             # Validate and clean segments
             cleaned_segments = []
@@ -376,10 +393,31 @@ async def create_synchronized_audio(
             with open(segment_path, "wb") as f:
                 f.write(response.content)
             
+            # Measure actual spoken duration to prevent later truncation
+            actual_duration = await get_audio_duration(segment_path)
+            if actual_duration <= 0:
+                actual_duration = max(segment.get("end_time", 0) - segment.get("start_time", 0), 1.0)
+
+            start_time = float(segment.get("start_time", 0.0))
+            planned_end = segment.get("end_time")
+            planned_end = float(planned_end) if planned_end is not None else start_time + actual_duration
+            actual_end = start_time + actual_duration
+            adjusted_end = max(planned_end, actual_end)
+
+            if adjusted_end > planned_end + 0.05:
+                logger.debug(
+                    "Extending narration segment %d end to %.2fs (planned %.2fs, actual %.2fs)",
+                    i,
+                    adjusted_end,
+                    planned_end,
+                    actual_duration,
+                )
+
             audio_segments.append({
                 "path": segment_path,
-                "start_time": segment["start_time"],
-                "end_time": segment["end_time"],
+                "start_time": start_time,
+                "end_time": adjusted_end,
+                "duration": actual_duration,
                 "text": text
             })
         
@@ -412,9 +450,15 @@ async def combine_audio_segments(segments: List[Dict[str, Any]], output_path: st
             raise Exception("No audio segments to combine")
         
         # Calculate total duration needed (ensure it covers full video)
-        max_end_time = max(seg["end_time"] for seg in segments)
+        def segment_actual_end(seg: Dict[str, Any]) -> float:
+            start = float(seg.get("start_time", 0.0))
+            duration = float(seg.get("duration", seg.get("end_time", start) - start))
+            end = float(seg.get("end_time", start + duration))
+            return max(end, start + duration)
+
+        max_end_time = max(segment_actual_end(seg) for seg in segments)
         # Add buffer to ensure we don't cut off audio
-        total_duration = max_end_time + 2.0
+        total_duration = max_end_time + 5.0
         
         logger.info(f"Creating base track with duration: {total_duration}s (max segment end: {max_end_time}s)")
         
@@ -466,11 +510,14 @@ async def combine_audio_segments(segments: List[Dict[str, Any]], output_path: st
         # Mix all delayed segments with the base track
         if len(segments) == 1:
             # Special case for single segment
-            filter_complex = f"{filter_parts[0]};[0:a][delayed0]amix=inputs=2:duration=first[out]"
+            filter_complex = f"{filter_parts[0]};[0:a][delayed0]amix=inputs=2:duration=longest:dropout_transition=0[out]"
         else:
             # Multiple segments
-            delayed_inputs = "+".join([f"[delayed{i}]" for i in range(len(segments))])
-            filter_complex = ";".join(filter_parts) + f";[0:a]{delayed_inputs}amix=inputs={len(segments)+1}:duration=first[out]"
+            delayed_inputs = "".join([f"[delayed{i}]" for i in range(len(segments))])
+            filter_complex = (
+                ";".join(filter_parts)
+                + f";[0:a]{delayed_inputs}amix=inputs={len(segments)+1}:duration=longest:dropout_transition=0[out]"
+            )
         
         final_output_file = f"temp_output/final_{os.path.basename(output_path)}"
         
@@ -729,6 +776,77 @@ async def concatenate_audio_segments_simple(segments: List[Dict[str, Any]], outp
         raise Exception(f"Failed to concatenate audio segments: {str(e)}")
 
 
+async def generate_subtitle_file_from_segments(
+    narration_segments: list[dict],
+    animation_id: str,
+    format: str = "srt"
+) -> str:
+    """
+    Generate subtitle file from narration segments with precise timing.
+
+    Args:
+        narration_segments: List of segments with start_time, end_time, text
+        animation_id: Video ID for file naming
+        format: 'srt' or 'vtt' (default: 'srt')
+
+    Returns:
+        Path to generated subtitle file
+    """
+    try:
+        subtitle_path = f"temp_output/{animation_id}_subtitles.{format}"
+        os.makedirs(os.path.dirname(subtitle_path), exist_ok=True)
+
+        with open(subtitle_path, "w", encoding="utf-8") as f:
+            if format == "vtt":
+                f.write("WEBVTT\n\n")
+
+            for i, segment in enumerate(narration_segments):
+                start_time = segment["start_time"]
+                end_time = segment["end_time"]
+                text = segment["text"]
+
+                # Format timestamps
+                if format == "srt":
+                    # SRT format: HH:MM:SS,mmm --> HH:MM:SS,mmm
+                    start_srt = format_srt_time(start_time)
+                    end_srt = format_srt_time(end_time)
+
+                    f.write(f"{i+1}\n")
+                    f.write(f"{start_srt} --> {end_srt}\n")
+                    f.write(f"{text}\n\n")
+                else:
+                    # VTT format: HH:MM:SS.mmm --> HH:MM:SS.mmm
+                    start_vtt = format_vtt_time(start_time)
+                    end_vtt = format_vtt_time(end_time)
+
+                    f.write(f"{start_vtt} --> {end_vtt}\n")
+                    f.write(f"{text}\n\n")
+
+        logger.info(f"Generated {format.upper()} subtitle file: {subtitle_path}")
+        return subtitle_path
+
+    except Exception as e:
+        raise Exception(f"Failed to generate subtitle file: {str(e)}")
+
+
+def format_srt_time(seconds: float) -> str:
+    """Format time in SRT format: HH:MM:SS,mmm"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds % 1) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def format_vtt_time(seconds: float) -> str:
+    """Format time in VTT format: HH:MM:SS.mmm"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds % 1) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+
 async def add_subtitles_to_video(
     video_path: str,
     narration_text: str,
@@ -844,7 +962,7 @@ async def extract_narration_from_script(
     
     try:
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=2000,
             system=system_prompt,
             messages=[

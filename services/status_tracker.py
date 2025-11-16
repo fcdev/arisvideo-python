@@ -19,6 +19,7 @@ class VideoStatus:
     error: Optional[str] = None
     file_path: Optional[str] = None
     duration: Optional[float] = None
+    subtitle_path: Optional[str] = None
 
 
 class StatusTracker:
@@ -44,7 +45,7 @@ class StatusTracker:
     def update(self, video_id: str, status: Optional[str] = None,
                step: Optional[int] = None, step_message: Optional[str] = None,
                error: Optional[str] = None, file_path: Optional[str] = None,
-               duration: Optional[float] = None) -> Optional[VideoStatus]:
+               duration: Optional[float] = None, subtitle_path: Optional[str] = None) -> Optional[VideoStatus]:
         """Update an existing status entry"""
         with self._lock:
             if video_id not in self._statuses:
@@ -63,6 +64,8 @@ class StatusTracker:
                 entry.file_path = file_path
             if duration is not None:
                 entry.duration = duration
+            if subtitle_path is not None:
+                entry.subtitle_path = subtitle_path
 
             entry.updated_at = datetime.now()
             return entry

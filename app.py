@@ -329,6 +329,8 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
             video_duration = await get_video_duration(video_path)
 
             # Handle different sync methods
+            subtitle_path = None  # Track subtitle file path
+
             if request.sync_method == "timing_analysis":
                 # Extract timing information from Manim script
                 timing_segments = await extract_animation_timing(client, manim_script)
@@ -337,6 +339,17 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
                 narration_segments = await generate_timed_narration(
                     client, manim_script, request.prompt, detected_language, timing_segments
                 )
+
+                # Generate subtitle file from narration segments
+                from services.audio_processor import generate_subtitle_file_from_segments
+                temp_subtitle_path = await generate_subtitle_file_from_segments(
+                    narration_segments, animation_id, format="srt"
+                )
+                # Save subtitle file to storage
+                final_subtitle_path = f"{storage_path}/{animation_id}.srt"
+                shutil.copy(temp_subtitle_path, final_subtitle_path)
+                subtitle_path = final_subtitle_path
+                logger.info(f"✅ Subtitle file saved: {final_subtitle_path}")
 
                 # Create synchronized audio
                 audio_path = await create_synchronized_audio(
@@ -406,7 +419,8 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
             status="completed",
             step_message="Generation completed",
             file_path=final_video_path,
-            duration=video_duration
+            duration=video_duration,
+            subtitle_path=subtitle_path
         )
 
         # Clean up file processor
@@ -563,6 +577,28 @@ async def stream_video(
             headers=headers,
             media_type="video/mp4"
         )
+
+
+@app.get("/subtitle/{video_id}")
+async def get_subtitle_file(
+    video_id: str,
+    api_key: None = Depends(verify_api_key)
+):
+    """
+    Download subtitle file for a video (SRT format).
+    Returns 404 if subtitle file doesn't exist.
+    """
+    storage_path = os.getenv("VIDEO_STORAGE_PATH", "./media/videos")
+    subtitle_path = f"{storage_path}/{video_id}.srt"
+
+    if not os.path.exists(subtitle_path):
+        raise HTTPException(status_code=404, detail="Subtitle file not found")
+
+    return FileResponse(
+        subtitle_path,
+        media_type="application/x-subrip",
+        filename=f"{video_id}.srt"
+    )
 
 
 @app.get("/cleanup")

@@ -445,7 +445,7 @@ IMPORTANT: Use the uploaded content as the primary source for your animation."""
         logger.info("=" * 120)
         
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=4000,
             system=system_prompt,
             messages=messages
@@ -608,7 +608,7 @@ async def refine_manim_script(
         logger.info("=" * 120)
         
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=4000,
             system=system_prompt,
             messages=conversation_history
@@ -735,7 +735,7 @@ async def fix_manim_script_from_error(
         logger.info("=" * 120)
         
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=4000,
             system=system_prompt,
             messages=[
@@ -1061,7 +1061,7 @@ async def detect_language(client: anthropic.Anthropic, prompt: str) -> str:
     
     try:
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=50,
             system=system_prompt,
             messages=[
@@ -1106,7 +1106,7 @@ async def estimate_narration_duration(client: anthropic.Anthropic, prompt: str) 
         logger.info(f"Estimating duration for prompt: {prompt[:50]}...")
         
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=50,
             system=system_prompt,
             messages=messages
@@ -1265,7 +1265,7 @@ Example:
     
     try:
         message = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=2000,
             system=system_prompt,
             messages=[

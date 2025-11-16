@@ -134,9 +134,10 @@ async def check_ffmpeg_available() -> bool:
 async def combine_audio_video(video_path: str, audio_path: str, output_path: str, video_duration: Optional[float] = None) -> None:
     """
     Combine audio and video using FFmpeg.
+    Ensures full audio plays by extending video if necessary.
     """
     from .audio_processor import get_audio_duration
-    
+
     try:
         # Check if FFmpeg is available
         if not await check_ffmpeg_available():
@@ -146,29 +147,20 @@ async def combine_audio_video(video_path: str, audio_path: str, output_path: str
                 "Ubuntu: sudo apt install ffmpeg\n"
                 "Windows: Download from https://ffmpeg.org/download.html"
             )
-        
+
         # Ensure output directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        
+
         # Use FFmpeg to combine audio and video with better synchronization
         ffmpeg_path = shutil.which("ffmpeg") or os.path.expanduser("~/bin/ffmpeg")
-        
-        # Get audio duration to check sync
+
+        # ALWAYS get both durations to prevent audio truncation
         audio_duration = await get_audio_duration(audio_path)
-        
-        cmd = [
-            ffmpeg_path,
-            "-i", video_path,     # Input video
-            "-i", audio_path,     # Input audio
-            "-c:v", "copy",       # Copy video codec (no re-encoding)
-            "-c:a", "aac",        # Convert audio to AAC
-            "-shortest",          # End when shortest stream ends
-            "-avoid_negative_ts", "make_zero",  # Fix timing issues
-            "-fflags", "+genpts", # Generate presentation timestamps
-            "-y",                 # Overwrite output file
-            output_path
-        ]
-        
+        if not video_duration:
+            video_duration = await get_video_duration(video_path)
+
+        logger.info(f"Video duration: {video_duration:.2f}s, Audio duration: {audio_duration:.2f}s")
+
         # Handle different audio/video duration scenarios for better educational pacing
         if video_duration and audio_duration:
             duration_ratio = audio_duration / video_duration
@@ -185,12 +177,13 @@ async def combine_audio_video(video_path: str, audio_path: str, output_path: str
                     "-map", "0:v", "-map", "[audio]",
                     "-c:v", "copy",
                     "-c:a", "aac",
+                    "-t", str(video_duration),  # Use video duration instead of -shortest
                     "-avoid_negative_ts", "make_zero",
                     "-fflags", "+genpts",
                     "-y",
                     output_path
                 ]
-            elif duration_ratio > 1.1:
+            elif duration_ratio > 1.05:  # Changed from 1.1 to 1.05 for better sync
                 # Audio longer - extend video by freezing last frame instead of looping
                 logger.info(f"Audio ({audio_duration:.1f}s) longer than video ({video_duration:.1f}s), extending video with freeze frame...")
                 
@@ -229,7 +222,7 @@ async def combine_audio_video(video_path: str, audio_path: str, output_path: str
                         "-i", audio_path,
                         "-c:v", "copy",
                         "-c:a", "aac",
-                        "-shortest",
+                        "-t", str(audio_duration),  # Use audio duration instead of -shortest
                         "-avoid_negative_ts", "make_zero",
                         "-fflags", "+genpts",
                         "-y",
@@ -244,7 +237,7 @@ async def combine_audio_video(video_path: str, audio_path: str, output_path: str
                         "-i", audio_path,
                         "-c:v", "copy",
                         "-c:a", "aac",
-                        "-shortest",
+                        "-t", str(audio_duration),  # Use audio duration to preserve full audio
                         "-avoid_negative_ts", "make_zero",
                         "-fflags", "+genpts",
                         "-y",
@@ -260,7 +253,36 @@ async def combine_audio_video(video_path: str, audio_path: str, output_path: str
                     
                     import atexit
                     atexit.register(cleanup_extended)
-        
+            else:
+                # Durations are close enough - combine normally but use audio duration
+                logger.info(f"Durations are well-matched, combining normally...")
+                cmd = [
+                    ffmpeg_path,
+                    "-i", video_path,
+                    "-i", audio_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-t", str(audio_duration),  # Use audio duration to preserve full audio
+                    "-avoid_negative_ts", "make_zero",
+                    "-fflags", "+genpts",
+                    "-y",
+                    output_path
+                ]
+        else:
+            # Fallback: if we couldn't get durations, combine with audio duration preference
+            logger.warning("Could not determine durations, using simple combination")
+            cmd = [
+                ffmpeg_path,
+                "-i", video_path,
+                "-i", audio_path,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-avoid_negative_ts", "make_zero",
+                "-fflags", "+genpts",
+                "-y",
+                output_path
+            ]
+
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
