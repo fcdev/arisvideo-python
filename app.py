@@ -46,6 +46,11 @@ from services import (
 from services.audio_processor import get_audio_duration
 from services.file_processor import get_file_processor, cleanup_file_processor
 from services.status_tracker import status_tracker
+from services.manim_script_modifier import (
+    calculate_wait_adjustments,
+    inject_wait_times,
+    validate_modified_script
+)
 
 # Import our utilities
 from utils import (
@@ -372,10 +377,68 @@ async def generate_video_background(request: AnimationRequest, animation_id: str
                 subtitle_path = final_subtitle_path
                 logger.info(f"✅ Subtitle file saved: {final_subtitle_path}")
 
-                # Create synchronized audio
-                audio_path = await create_synchronized_audio(
+                # Create synchronized audio (now returns metadata)
+                audio_path, segment_metadata = await create_synchronized_audio(
                     narration_segments, animation_id, request.voice, detected_language
                 )
+
+                # TWO-PASS RENDERING: Adjust script timing based on actual audio duration
+                adjustments = calculate_wait_adjustments(
+                    timing_segments,
+                    segment_metadata,
+                    threshold=request.timing_adjustment_threshold
+                )
+
+                if adjustments:
+                    logger.info(f"🔧 Adjusting Manim script timing for {len(adjustments)} segments")
+                    status_tracker.update_status(
+                        animation_id,
+                        "rendering",
+                        current_step="Adjusting script timing based on audio duration",
+                        progress=55
+                    )
+
+                    # Inject wait times into the script
+                    modified_script = inject_wait_times(manim_script, adjustments, timing_segments)
+
+                    # Validate the modified script
+                    is_valid, error_msg = validate_modified_script(modified_script)
+                    if not is_valid:
+                        logger.warning(f"Modified script validation failed: {error_msg}")
+                        logger.warning("Proceeding with original script")
+                    else:
+                        # Save modified script
+                        modified_script_path = f"temp_scripts/{animation_id}_adjusted.py"
+                        os.makedirs("temp_scripts", exist_ok=True)
+                        with open(modified_script_path, "w", encoding="utf-8") as f:
+                            f.write(modified_script)
+
+                        # Re-render with adjusted script
+                        logger.info("🎬 Re-rendering video with adjusted timing")
+                        status_tracker.update_status(
+                            animation_id,
+                            "rendering",
+                            current_step="Re-rendering video with adjusted timing",
+                            progress=60
+                        )
+
+                        # Clean up old video
+                        try:
+                            os.remove(video_path)
+                        except:
+                            pass
+
+                        # Execute adjusted Manim script
+                        video_path = await execute_manim_script(
+                            modified_script_path, animation_id, request.resolution
+                        )
+                        video_duration = await get_video_duration(video_path)
+                        logger.info(f"✅ Re-rendered video duration: {video_duration:.2f}s")
+
+                        # Update manim_script for future reference
+                        manim_script = modified_script
+                else:
+                    logger.info("✅ No timing adjustments needed - audio matches video segments")
 
             elif request.sync_method == "subtitle_overlay":
                 narration_text = await extract_narration_from_script(

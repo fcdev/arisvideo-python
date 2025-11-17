@@ -6,7 +6,7 @@ import os
 import re
 import asyncio
 import shutil
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import anthropic
 from anthropic.types import TextBlock
 import openai
@@ -342,9 +342,13 @@ async def create_synchronized_audio(
     animation_id: str,
     voice: str,
     language: str
-) -> str:
+) -> Tuple[str, List[Dict[str, Any]]]:
     """
     Create audio with precise timing using silence padding.
+
+    Returns:
+        Tuple of (audio_path, segment_metadata) where segment_metadata contains
+        timing information for each segment including actual audio durations.
     """
     try:
         client = get_openai_client()
@@ -393,7 +397,7 @@ async def create_synchronized_audio(
             with open(segment_path, "wb") as f:
                 f.write(response.content)
             
-            # Measure actual spoken duration to prevent later truncation
+            # Measure actual spoken duration
             actual_duration = await get_audio_duration(segment_path)
             if actual_duration <= 0:
                 actual_duration = max(segment.get("end_time", 0) - segment.get("start_time", 0), 1.0)
@@ -401,38 +405,118 @@ async def create_synchronized_audio(
             start_time = float(segment.get("start_time", 0.0))
             planned_end = segment.get("end_time")
             planned_end = float(planned_end) if planned_end is not None else start_time + actual_duration
+
+            # Calculate planned video segment duration
+            planned_duration = planned_end - start_time
+
+            # BIDIRECTIONAL MATCHING: Pad audio with silence if video segment is longer
+            if actual_duration < planned_duration - 0.1:  # 100ms threshold
+                silence_needed = planned_duration - actual_duration
+                logger.info(
+                    f"Segment {i}: Video ({planned_duration:.2f}s) longer than audio ({actual_duration:.2f}s), "
+                    f"padding with {silence_needed:.2f}s silence"
+                )
+
+                # Create padded audio file with silence appended
+                padded_path = f"temp_output/{animation_id}_segment_{i}_padded.mp3"
+                silence_duration_ms = int(silence_needed * 1000)
+
+                # Use FFmpeg to append silence
+                ffmpeg_path = shutil.which("ffmpeg") or os.path.expanduser("~/bin/ffmpeg")
+                pad_cmd = [
+                    ffmpeg_path,
+                    "-i", segment_path,
+                    "-f", "lavfi",
+                    "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:duration={silence_needed}",
+                    "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+                    "-map", "[out]",
+                    "-c:a", "mp3",
+                    "-y",
+                    padded_path
+                ]
+
+                process = await asyncio.create_subprocess_exec(
+                    *pad_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                await process.communicate()
+
+                if process.returncode == 0:
+                    # Replace original with padded version
+                    os.remove(segment_path)
+                    segment_path = padded_path
+                    actual_duration = planned_duration
+                    logger.debug(f"Segment {i} padded successfully to {actual_duration:.2f}s")
+                else:
+                    logger.warning(f"Segment {i} padding failed, using original audio")
+
             actual_end = start_time + actual_duration
             adjusted_end = max(planned_end, actual_end)
 
             if adjusted_end > planned_end + 0.05:
                 logger.debug(
-                    "Extending narration segment %d end to %.2fs (planned %.2fs, actual %.2fs)",
+                    "Segment %d: Audio longer than video, will need wait() in video script "
+                    "(planned %.2fs, actual %.2fs)",
                     i,
-                    adjusted_end,
-                    planned_end,
+                    planned_end - start_time,
                     actual_duration,
                 )
 
             audio_segments.append({
                 "path": segment_path,
-                "start_time": start_time,
+                "start_time": start_time,  # Original planned timing
                 "end_time": adjusted_end,
                 "duration": actual_duration,
-                "text": text
+                "text": text,
+                "planned_start": start_time,  # Store original timing for reference
+                "planned_end": adjusted_end
             })
-        
+
+        # CRITICAL FIX: Recalculate timing to be cumulative (sequential) to prevent audio overlay
+        # This ensures segments play one after another, never simultaneously
+        cumulative_time = 0.0
+        for i, segment in enumerate(audio_segments):
+            # Update timing to be sequential based on actual audio durations
+            segment["start_time"] = cumulative_time
+            segment["end_time"] = cumulative_time + segment["duration"]
+            cumulative_time = segment["end_time"]
+
+            logger.debug(
+                "Segment %d cumulative timing: %.2fs-%.2fs (planned: %.2fs-%.2fs)",
+                i, segment["start_time"], segment["end_time"],
+                segment["planned_start"], segment["planned_end"]
+            )
+
+        logger.info(f"Total cumulative audio duration: {cumulative_time:.2f}s")
+
         # Combine segments with precise timing using FFmpeg
         final_audio_path = f"temp_output/{animation_id}_synced_audio.mp3"
         await combine_audio_segments(audio_segments, final_audio_path)
-        
+
+        # Prepare segment metadata for timing adjustment
+        # planned_start/end = original video animation timing from Claude AI
+        # actual_start/end = cumulative sequential audio timing (prevents overlay)
+        segment_metadata = []
+        for i, segment in enumerate(audio_segments):
+            segment_metadata.append({
+                "segment_index": i,
+                "planned_start": segment["planned_start"],  # Original video timing
+                "planned_end": segment["planned_end"],      # Original video timing
+                "actual_start": segment["start_time"],      # Cumulative audio timing
+                "actual_end": segment["end_time"],          # Cumulative audio timing
+                "audio_duration": segment["duration"],
+                "text": segment["text"]
+            })
+
         # Clean up segment files
         for segment in audio_segments:
             try:
                 os.remove(segment["path"])
             except:
                 pass
-        
-        return final_audio_path
+
+        return final_audio_path, segment_metadata
         
     except Exception as e:
         raise Exception(f"Failed to create synchronized audio: {str(e)}")
@@ -440,129 +524,27 @@ async def create_synchronized_audio(
 
 async def combine_audio_segments(segments: List[Dict[str, Any]], output_path: str) -> None:
     """
-    Combine audio segments with precise timing using FFmpeg.
+    Combine audio segments sequentially with silence gaps using FFmpeg concat.
+
+    CRITICAL FIX: This function now uses sequential concatenation instead of amix
+    to prevent audio overlay issues. Segments are played one after another with
+    silence gaps, never simultaneously.
     """
     try:
-        ffmpeg_path = shutil.which("ffmpeg") or os.path.expanduser("~/bin/ffmpeg")
-        
-        # Use a simpler approach: create silent base track and overlay segments
         if len(segments) == 0:
             raise Exception("No audio segments to combine")
-        
-        # Calculate total duration needed (ensure it covers full video)
-        def segment_actual_end(seg: Dict[str, Any]) -> float:
-            start = float(seg.get("start_time", 0.0))
-            duration = float(seg.get("duration", seg.get("end_time", start) - start))
-            end = float(seg.get("end_time", start + duration))
-            return max(end, start + duration)
 
-        max_end_time = max(segment_actual_end(seg) for seg in segments)
-        # Add buffer to ensure we don't cut off audio
-        total_duration = max_end_time + 5.0
-        
-        logger.info(f"Creating base track with duration: {total_duration}s (max segment end: {max_end_time}s)")
-        
-        # Create silent base track
-        base_cmd = [
-            ffmpeg_path,
-            "-f", "lavfi",
-            "-i", f"anullsrc=channel_layout=stereo:sample_rate=44100:duration={total_duration}",
-            "-c:a", "mp3",
-            "-y",
-            f"temp_output/base_{os.path.basename(output_path)}"
-        ]
-        
-        process = await asyncio.create_subprocess_exec(
-            *base_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        await process.communicate()
-        
-        if process.returncode != 0:
-            # Fallback: just concatenate all segments sequentially
-            logger.warning("Complex timing failed, using sequential concatenation")
-            await concatenate_audio_segments_simple(segments, output_path)
-            return
-        
-        # Use a different approach: overlay all segments at once instead of iterative overlay
-        # This prevents losing early segments
-        
-        logger.info("Overlaying all segments simultaneously...")
-        
-        # Build filter complex for all segments at once
-        current_file = f"temp_output/base_{os.path.basename(output_path)}"
-        input_files = ["-i", current_file]  # Base silent track
-        filter_parts = []
-        
-        # Add all segment files as inputs
-        for i, segment in enumerate(segments):
-            input_files.extend(["-i", segment["path"]])
-            start_time_ms = int(segment["start_time"] * 1000)
-            logger.info(f"Adding segment {i} at {segment['start_time']}s ({start_time_ms}ms)")
-            
-            # Delay each segment to its start time
-            if start_time_ms > 0:
-                filter_parts.append(f"[{i+1}:a]adelay={start_time_ms}|{start_time_ms}[delayed{i}]")
-            else:
-                filter_parts.append(f"[{i+1}:a]anull[delayed{i}]")
-        
-        # Mix all delayed segments with the base track
-        if len(segments) == 1:
-            # Special case for single segment
-            filter_complex = f"{filter_parts[0]};[0:a][delayed0]amix=inputs=2:duration=longest:dropout_transition=0[out]"
-        else:
-            # Multiple segments
-            delayed_inputs = "".join([f"[delayed{i}]" for i in range(len(segments))])
-            filter_complex = (
-                ";".join(filter_parts)
-                + f";[0:a]{delayed_inputs}amix=inputs={len(segments)+1}:duration=longest:dropout_transition=0[out]"
-            )
-        
-        final_output_file = f"temp_output/final_{os.path.basename(output_path)}"
-        
-        cmd = [
-            ffmpeg_path,
-            *input_files,
-            "-filter_complex", filter_complex,
-            "-map", "[out]",
-            "-c:a", "mp3",
-            "-y",
-            final_output_file
-        ]
-        
-        logger.info(f"FFmpeg command: {' '.join(cmd)}")
-        
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode != 0:
-            logger.warning(f"Simultaneous overlay failed: {stderr.decode()}")
-            logger.warning("Falling back to simple segment-by-segment approach")
-            await create_simple_timed_audio(segments, output_path)
-            return
-        
-        current_file = final_output_file
-        
-        # Move final result to output path
-        shutil.move(current_file, output_path)
-        
-        # Clean up base file
-        try:
-            os.remove(f"temp_output/base_{os.path.basename(output_path)}")
-        except:
-            pass
-        
-        logger.info(f"Synchronized audio created: {output_path}")
-        
-    except Exception as e:
-        logger.warning(f"Complex audio timing failed: {str(e)}, using simple concatenation")
+        logger.info(f"Combining {len(segments)} audio segments sequentially (no overlay)")
+
+        # Use sequential concatenation approach (NOT amix which causes overlay)
+        # This ensures segments never play simultaneously
         await create_simple_timed_audio(segments, output_path)
+
+        logger.info(f"Sequential audio combination complete: {output_path}")
+
+    except Exception as e:
+        logger.error(f"Audio combination failed: {str(e)}")
+        raise Exception(f"Failed to combine audio segments: {str(e)}")
 
 
 async def create_simple_timed_audio(segments: List[Dict[str, Any]], output_path: str) -> None:

@@ -24,6 +24,7 @@ class AnimationRequest(BaseModel):
     language: Optional[str] = None  # Language code (auto-detected if None)
     sync_method: str = "timing_analysis"  # "timing_analysis", "narration_first", "subtitle_overlay"
     uploaded_files_context: Optional[str] = None  # Extracted text content from uploaded files
+    timing_adjustment_threshold: float = 0.1  # Minimum duration mismatch (seconds) to trigger script adjustment
 
 
 class AnimationResponse(BaseModel):
